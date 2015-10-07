@@ -20,6 +20,8 @@
 # The log file entries produced in CLF will look something like this:
 # `127.0.0.1 - - [01/Aug/1995:00:00:01 -0400] "GET /images/launch-logo.gif HTTP/1.0" 200 1839`
 #  
+# This program is adapted from edx Berkeley / DataBricks.
+#
 
 import sys
 import os
