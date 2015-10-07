@@ -1,4 +1,4 @@
-# Web server log analysis with Apache Spark
+# Web server log analysis with Spark
 
 This program illustrates how to use Apache Spark on real-world text-based production logs.
 
