@@ -214,7 +214,7 @@ if __name__ == "__main__":
     print '404 Errors by day: %s' % errByDate
 
 
-    # Exercise: Visualizing the 404 Response Codes by Day
+    # Visualizing the 404 Response Codes by Day
     daysWithErrors404 = errDateSorted.map(lambda x: x[0]).collect()
     errors404ByDay = errDateSorted.map(lambda x: x[1]).collect()
 
@@ -224,7 +224,7 @@ if __name__ == "__main__":
     print 'Top Five dates for 404 requests: %s' % topErrDate
 
 
-    # Exercise: Hourly 404 Response Codes**
+    # Hourly 404 Response Codes**
     hourCountPairTuple = badRecords.map(lambda log: (log.date_time.hour, 1))
     hourRecordsSum = hourCountPairTuple.reduceByKey(lambda a, b: a+b)
     hourRecordsSorted = hourRecordsSum.sortByKey().cache()
