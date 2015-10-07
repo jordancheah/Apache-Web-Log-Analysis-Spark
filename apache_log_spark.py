@@ -1,7 +1,7 @@
 
 # coding: utf-8
 
-# Web server log analysis with Apache Spark.
+# Web server log analysis with Spark
 #  
 # Server log analysis is an ideal use case for Spark.  
 # It's a very large, common data source and contains a rich set of information.  
@@ -31,6 +31,9 @@ from pyspark.sql import Row
 month_map = {'Jan': 1, 'Feb': 2, 'Mar':3, 'Apr':4, 'May':5, 'Jun':6, 'Jul':7,
     'Aug':8,  'Sep': 9, 'Oct':10, 'Nov': 11, 'Dec': 12}
 
+# A regular expression pattern to extract fields from the log line
+APACHE_ACCESS_LOG_PATTERN = '^(\S+) (\S+) (\S+) \[([\w:/]+\s[+\-]\d{4})\] "(\S+) (\S+)\s*(\S*)" (\d{3}) (\S+)'
+
 def parse_apache_time(s):
     """ Convert Apache time format into a Python datetime object
     Args:
@@ -44,9 +47,6 @@ def parse_apache_time(s):
                              int(s[12:14]),
                              int(s[15:17]),
                              int(s[18:20]))
-
-# A regular expression pattern to extract fields from the log line
-APACHE_ACCESS_LOG_PATTERN = '^(\S+) (\S+) (\S+) \[([\w:/]+\s[+\-]\d{4})\] "(\S+) (\S+)\s*(\S*)" (\d{3}) (\S+)'
 
 # Parsing Each Log Line
 # The function returns a pair consisting of a Row object and 1. 
@@ -111,127 +111,125 @@ if __name__ == "__main__":
     logFile = os.path.join(baseDir, inputPath)
     parsed_logs, access_logs, failed_logs = parseLogs()
 
+    # Calculate statistics based on the content size.
+    content_sizes = access_logs.map(lambda log: log.content_size).cache()
+    print 'Content Size Avg: %i, Min: %i, Max: %s' % (
+        content_sizes.reduce(lambda a, b : a + b) / content_sizes.count(),
+        content_sizes.min(),
+        content_sizes.max())
+
+    # Response Code Analysis
+    responseCodeToCount = (access_logs
+                        .map(lambda log: (log.response_code, 1))
+                        .reduceByKey(lambda a, b : a + b)
+                        .cache())
+    responseCodeToCountList = responseCodeToCount.take(100)
+    print 'Found %d response codes' % len(responseCodeToCountList)
+    print 'Response Code Counts: %s' % responseCodeToCountList
 
 
-# Calculate statistics based on the content size.
-content_sizes = access_logs.map(lambda log: log.content_size).cache()
-print 'Content Size Avg: %i, Min: %i, Max: %s' % (
-    content_sizes.reduce(lambda a, b : a + b) / content_sizes.count(),
-    content_sizes.min(),
-    content_sizes.max())
-
-# Response Code Analysis
-responseCodeToCount = (access_logs
-                       .map(lambda log: (log.response_code, 1))
-                       .reduceByKey(lambda a, b : a + b)
-                       .cache())
-responseCodeToCountList = responseCodeToCount.take(100)
-print 'Found %d response codes' % len(responseCodeToCountList)
-print 'Response Code Counts: %s' % responseCodeToCountList
+    # Frequent Host Analysis
+    # Any hosts that has accessed the server more than 10 times.
+    hostCountPairTuple = access_logs.map(lambda log: (log.host, 1))
+    hostSum = hostCountPairTuple.reduceByKey(lambda a, b : a + b)
+    hostMoreThan10 = hostSum.filter(lambda s: s[1] > 10)
+    hostsPick20 = (hostMoreThan10
+                 .map(lambda s: s[0])
+                 .take(20))
+    print 'Any 20 hosts that have accessed more then 10 times: %s' % hostsPick20
 
 
-# Frequent Host Analysis
-# Any hosts that has accessed the server more than 10 times.
-hostCountPairTuple = access_logs.map(lambda log: (log.host, 1))
-hostSum = hostCountPairTuple.reduceByKey(lambda a, b : a + b)
-hostMoreThan10 = hostSum.filter(lambda s: s[1] > 10)
-
-hostsPick20 = (hostMoreThan10
-               .map(lambda s: s[0])
-               .take(20))
-
-print 'Any 20 hosts that have accessed more then 10 times: %s' % hostsPick20
+    # Top Endpoints
+    endpointCounts = (access_logs
+                      .map(lambda log: (log.endpoint, 1))
+                      .reduceByKey(lambda a, b : a + b))
+    topEndpoints = endpointCounts.takeOrdered(10, lambda s: -1 * s[1])
+    print 'Top Ten Endpoints: %s' % topEndpoints
 
 
-# Top Endpoints
-endpointCounts = (access_logs
-                  .map(lambda log: (log.endpoint, 1))
-                  .reduceByKey(lambda a, b : a + b))
-
-topEndpoints = endpointCounts.takeOrdered(10, lambda s: -1 * s[1])
-
-print 'Top Ten Endpoints: %s' % topEndpoints
-
-# Top Ten Error Endpoints - What are the top ten endpoints which did not have return code 200
-not200 = access_logs.filter(lambda log: log.response_code != 200)
-endpointCountPairTuple = not200.map(lambda log: (log.endpoint, 1))
-endpointSum = endpointCountPairTuple.reduceByKey(lambda a, b: a + b)
-topTenErrURLs = endpointSum.takeOrdered(10, lambda s: -1 * s[1])
-print 'Top Ten failed URLs: %s' % topTenErrURLs
+    # Top Ten Error Endpoints - What are the top ten endpoints which did not have return code 200
+    not200 = access_logs.filter(lambda log: log.response_code != 200)
+    endpointCountPairTuple = not200.map(lambda log: (log.endpoint, 1))
+    endpointSum = endpointCountPairTuple.reduceByKey(lambda a, b: a + b)
+    topTenErrURLs = endpointSum.takeOrdered(10, lambda s: -1 * s[1])
+    print 'Top Ten failed URLs: %s' % topTenErrURLs
 
 
-# Number of Unique Hosts**
-hosts = access_logs.map(lambda log: log.host)
-uniqueHosts = hosts.distinct()
-uniqueHostCount = uniqueHosts.count()
-print 'Unique hosts: %d' % uniqueHostCount
-
-# Number of Unique Daily Hosts
-dayToHostPairTuple = access_logs.map(lambda log: (log.date_time.day, log.host))
-dayGroupedHosts = dayToHostPairTuple.groupByKey()
-dayHostCount = dayGroupedHosts.map(lambda pair: (pair[0], len(set(pair[1]))))
-dailyHosts = dayHostCount.sortByKey().cache()
-dailyHostsList = dailyHosts.take(30)
-print 'Unique hosts per day: %s' % dailyHostsList
+    # Number of Unique Hosts**
+    hosts = access_logs.map(lambda log: log.host)
+    uniqueHosts = hosts.distinct()
+    uniqueHostCount = uniqueHosts.count()
+    print 'Unique hosts: %d' % uniqueHostCount
 
 
-# Average Number of Daily Requests per Hosts
-
-dayAndHostTuple = access_logs.map(lambda log: (log.date_time.day, log.host))
-groupedByDay = dayAndHostTuple.groupByKey()
-sortedByDay = groupedByDay.sortByKey()
-avgDailyReqPerHost = sortedByDay.map(lambda x: (x[0], len(x[1])/len(set(x[1])))).cache()
-avgDailyReqPerHostList = avgDailyReqPerHost.take(30)
-print 'Average number of daily requests per Hosts is %s' % avgDailyReqPerHostList
-
-# How many 404 records are in the log?
-badRecords = access_logs.filter(lambda log: log.response_code==404).cache()
-print 'Found %d 404 URLs' % badRecords.count()
-
-# Listing 404 Response Code Records
-badEndpoints = badRecords.map(lambda log: log.endpoint)
-badUniqueEndpoints = badEndpoints.distinct()
-badUniqueEndpointsPick40 = badUniqueEndpoints.take(40)
-print '404 URLS: %s' % badUniqueEndpointsPick40
+    # Number of Unique Daily Hosts
+    dayToHostPairTuple = access_logs.map(lambda log: (log.date_time.day, log.host))
+    dayGroupedHosts = dayToHostPairTuple.groupByKey()
+    dayHostCount = dayGroupedHosts.map(lambda pair: (pair[0], len(set(pair[1]))))
+    dailyHosts = dayHostCount.sortByKey().cache()
+    dailyHostsList = dailyHosts.take(30)
+    print 'Unique hosts per day: %s' % dailyHostsList
 
 
-# Listing the Top Twenty 404 Response Code Endpoints**
-badEndpointsCountPairTuple = badRecords.map(lambda log: (log.endpoint, 1)).reduceByKey(lambda a, b: a+b)
-badEndpointsSum = badEndpointsCountPairTuple.sortBy(lambda x: x[1], False)
-badEndpointsTop20 = badEndpointsSum.take(20)
-print 'Top Twenty 404 URLs: %s' % badEndpointsTop20
-
-# Listing the Top Twenty-five 404 Response Code Hosts
-errHostsCountPairTuple = badRecords.map(lambda log: (log.host, 1)).reduceByKey(lambda a, b: a+b)
-errHostsSum = errHostsCountPairTuple.sortBy(lambda x: x[1], False)
-errHostsTop25 = errHostsSum.take(25)
-print 'Top 25 hosts that generated errors: %s' % errHostsTop25
+    # Average Number of Daily Requests per Hosts
+    dayAndHostTuple = access_logs.map(lambda log: (log.date_time.day, log.host))
+    groupedByDay = dayAndHostTuple.groupByKey()
+    sortedByDay = groupedByDay.sortByKey()
+    avgDailyReqPerHost = sortedByDay.map(lambda x: (x[0], len(x[1])/len(set(x[1])))).cache()
+    avgDailyReqPerHostList = avgDailyReqPerHost.take(30)
+    print 'Average number of daily requests per Hosts is %s' % avgDailyReqPerHostList
 
 
-# Listing 404 Response Codes per Day
-errDateCountPairTuple = badRecords.map(lambda log: (log.date_time.day, 1))
-errDateSum = errDateCountPairTuple.reduceByKey(lambda a, b: a+b)
-errDateSorted = errDateSum.sortByKey().cache()
-errByDate = errDateSorted.collect()
-print '404 Errors by day: %s' % errByDate
+    # How many 404 records are in the log?
+    badRecords = access_logs.filter(lambda log: log.response_code==404).cache()
+    print 'Found %d 404 URLs' % badRecords.count()
 
 
-# Exercise: Visualizing the 404 Response Codes by Day
-daysWithErrors404 = errDateSorted.map(lambda x: x[0]).collect()
-errors404ByDay = errDateSorted.map(lambda x: x[1]).collect()
+    # Listing 404 Response Code Records
+    badEndpoints = badRecords.map(lambda log: log.endpoint)
+    badUniqueEndpoints = badEndpoints.distinct()
+    badUniqueEndpointsPick40 = badUniqueEndpoints.take(40)
+    print '404 URLS: %s' % badUniqueEndpointsPick40
 
 
-# Top Five Days for 404 Response Codes 
-topErrDate = errDateSorted.sortBy(lambda x: -x[1]).take(5)
-print 'Top Five dates for 404 requests: %s' % topErrDate
+    # Listing the Top Twenty 404 Response Code Endpoints**
+    badEndpointsCountPairTuple = badRecords.map(lambda log: (log.endpoint, 1)).reduceByKey(lambda a, b: a+b)
+    badEndpointsSum = badEndpointsCountPairTuple.sortBy(lambda x: x[1], False)
+    badEndpointsTop20 = badEndpointsSum.take(20)
+    print 'Top Twenty 404 URLs: %s' % badEndpointsTop20
 
 
-# Exercise: Hourly 404 Response Codes**
-hourCountPairTuple = badRecords.map(lambda log: (log.date_time.hour, 1))
-hourRecordsSum = hourCountPairTuple.reduceByKey(lambda a, b: a+b)
-hourRecordsSorted = hourRecordsSum.sortByKey().cache()
-errHourList = hourRecordsSorted.collect()
-print 'Top hours for 404 requests: %s' % errHourList
+    # Listing the Top Twenty-five 404 Response Code Hosts
+    errHostsCountPairTuple = badRecords.map(lambda log: (log.host, 1)).reduceByKey(lambda a, b: a+b)
+    errHostsSum = errHostsCountPairTuple.sortBy(lambda x: x[1], False)
+    errHostsTop25 = errHostsSum.take(25)
+    print 'Top 25 hosts that generated errors: %s' % errHostsTop25
+
+
+    # Listing 404 Response Codes per Day
+    errDateCountPairTuple = badRecords.map(lambda log: (log.date_time.day, 1))
+    errDateSum = errDateCountPairTuple.reduceByKey(lambda a, b: a+b)
+    errDateSorted = errDateSum.sortByKey().cache()
+    errByDate = errDateSorted.collect()
+    print '404 Errors by day: %s' % errByDate
+
+
+    # Exercise: Visualizing the 404 Response Codes by Day
+    daysWithErrors404 = errDateSorted.map(lambda x: x[0]).collect()
+    errors404ByDay = errDateSorted.map(lambda x: x[1]).collect()
+
+
+    # Top Five Days for 404 Response Codes 
+    topErrDate = errDateSorted.sortBy(lambda x: -x[1]).take(5)
+    print 'Top Five dates for 404 requests: %s' % topErrDate
+
+
+    # Exercise: Hourly 404 Response Codes**
+    hourCountPairTuple = badRecords.map(lambda log: (log.date_time.hour, 1))
+    hourRecordsSum = hourCountPairTuple.reduceByKey(lambda a, b: a+b)
+    hourRecordsSorted = hourRecordsSum.sortByKey().cache()
+    errHourList = hourRecordsSorted.collect()
+    print 'Top hours for 404 requests: %s' % errHourList
 
 
 
